@@ -1,0 +1,182 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+# Répertoires principaux
+ROOT = os.path.dirname(os.path.abspath(__file__))
+IMG_DIR = ROOT
+OUT_DIR = os.path.join(ROOT, "results")
+
+PLOT_SIZE = (15, 10)
+
+
+def read_gray(path):
+    """
+    Charge une image en niveaux de gris.
+    """
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise RuntimeError(f"Erreur : image introuvable -> {path}")
+    return img
+
+
+def get_hist(img):
+    """
+    Renvoie l'histogramme (256 niveaux).
+    """
+    h = cv2.calcHist([img], [0], None, [256], [0, 256])
+    return h[:, 0]
+
+
+def apply_equalization(img):
+    """
+    Effectue l’égalisation d’histogramme d’OpenCV.
+    """
+    return cv2.equalizeHist(img)
+
+
+def apply_linear_mapping(img, a, b):
+    """
+    Transformation linéaire : pixel' = a * pixel + b
+    """
+    tmp = a * img.astype(np.float32) + b
+    tmp = np.clip(tmp, 0, 255)
+    return tmp.astype(np.uint8)
+
+
+def apply_gamma(img, g):
+    """
+    Correction gamma via une table de correspondance.
+    """
+    lut = np.array([((i / 255) ** g) * 255 for i in range(256)]).astype(np.uint8)
+    return cv2.LUT(img, lut)
+
+
+def make_visual(original, processed, method, params):
+    """
+    Production d'une figure comparant image originale / image traitée + histogrammes.
+    """
+    fig, ax = plt.subplots(2, 2, figsize=PLOT_SIZE)
+    fig.suptitle(f"Analyse - {method}", fontsize=16)
+
+    # Image d'origine
+    ax[0, 0].imshow(original, cmap="gray")
+    ax[0, 0].set_title("Originale")
+    ax[0, 0].axis("off")
+
+    # Histogramme d'origine
+    ax[0, 1].plot(get_hist(original), color="black")
+    ax[0, 1].set_title("Histogramme Original")
+    ax[0, 1].grid(True)
+
+    # Image traitée
+    ax[1, 0].imshow(processed, cmap="gray")
+    ax[1, 0].set_title(f"Traitée ({params})")
+    ax[1, 0].axis("off")
+
+    # Histogramme traité
+    ax[1, 1].plot(get_hist(processed), color="black")
+    ax[1, 1].set_title("Histogramme Modifié")
+    ax[1, 1].grid(True)
+
+    plt.tight_layout()
+    return fig
+
+
+def save_outputs(fig, img_proc, base, folder, tag):
+    """
+    Sauvegarde de la figure + sauvegarde de l'image traitée.
+    """
+    os.makedirs(os.path.join(OUT_DIR, folder), exist_ok=True)
+
+    fig_name = f"{base}_{tag}.png"
+    fig_path = os.path.join(OUT_DIR, folder, fig_name)
+    fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+
+    plt.close(fig)
+
+    proc_path = os.path.join(OUT_DIR, folder, f"{base}_{tag}_processed.png")
+    cv2.imwrite(proc_path, img_proc)
+
+
+def comparison_sheet(img_path):
+    """
+    Génère une grande figure résumant les quatre méthodes pour une image.
+    """
+    original = read_gray(img_path)
+    name = os.path.basename(img_path)
+    base = os.path.splitext(name)[0]
+
+    # Transformations représentatives
+    eq = apply_equalization(original)
+    lin = apply_linear_mapping(original, 1.5, 0)
+    gam = apply_gamma(original, 0.5)
+
+    fig, ax = plt.subplots(4, 2, figsize=(20, 20))
+    fig.suptitle(f"Comparatif Global - {name}", fontsize=16)
+
+    tests = [
+        ("Originale", original),
+        ("Histogramme Égalisé", eq),
+        ("Lin. (a=1.5, b=0)", lin),
+        ("Gamma (0.5)", gam)
+    ]
+
+    for i, (label, img) in enumerate(tests):
+        ax[i, 0].imshow(img, cmap="gray")
+        ax[i, 0].set_title(label)
+        ax[i, 0].axis("off")
+
+        ax[i, 1].plot(get_hist(img), color="black")
+        ax[i, 1].set_title(f"Histogramme - {label}")
+        ax[i, 1].grid(True)
+
+    plt.tight_layout()
+    out_path = os.path.join(OUT_DIR, "comparisons", f"{base}_overview.png")
+    os.makedirs(os.path.join(OUT_DIR, "comparisons"), exist_ok=True)
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def run_pipeline():
+    """
+    Exécution générale du programme.
+    """
+    os.makedirs(OUT_DIR, exist_ok=True)
+
+    img_list = ["images4.PNG", "images5.JPG", "images8.JPG", "images10.JPG"]
+
+    for img_name in img_list:
+        img_path = os.path.join(IMG_DIR, img_name)
+        original = read_gray(img_path)
+        base = os.path.splitext(img_name)[0]
+
+        # Égalisation
+        eq = apply_equalization(original)
+        fig = make_visual(original, eq, "Égalisation d'Histogramme", "equalized")
+        save_outputs(fig, eq, img_name, "histogram_equalization", "equalized")
+
+        # Transformations linéaires
+        lin_set = [(1.5, 0), (2.0, 0), (1.5, 30), (2.5, -20)]
+        for a, b in lin_set:
+            out = apply_linear_mapping(original, a, b)
+            tag = f"a{a}_b{b}"
+            fig = make_visual(original, out, "Transformation Linéaire", tag)
+            save_outputs(fig, out, img_name, "linear_transformation", tag)
+
+        # Corrections gamma
+        gamma_vals = [0.5, 0.8, 1.5, 2.2]
+        for g in gamma_vals:
+            out = apply_gamma(original, g)
+            tag = f"gamma{g}"
+            fig = make_visual(original, out, "Correction Gamma", tag)
+            save_outputs(fig, out, img_name, "gamma_correction", tag)
+
+    # Comparaisons globales
+    for img_name in img_list:
+        comparison_sheet(os.path.join(IMG_DIR, img_name))
+
+
+if __name__ == "__main__":
+    run_pipeline()
